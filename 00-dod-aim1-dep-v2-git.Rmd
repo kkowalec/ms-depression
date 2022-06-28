@@ -1,0 +1,1216 @@
+---
+title: "dod-aim1-dep"
+author: "Kaarina Kowalec"
+date: "31 May 2022"
+output:
+  prettydoc::html_pretty:
+    theme: architect
+    highlight: github
+    toc: true
+---
+
+# Background
+These analyses are related to investigating the association between polygenicity
+of depression and comorbid depression in multiple sclerosis. This file covers
+the analyses related to the Canadian/USA datasets
+
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+
+# 1. Load libraries
+```{r}
+library(tidyverse) # for data wrangling
+library(data.table) # for text files
+library(haven) # for SAS files
+library(readxl) # for excel files
+library(metafor) # for meta-analyses
+set.seed(1234)
+```
+
+# 2. Load data
+```{r}
+load("/Volumes/kowalec_pharmacy-1/psych_imid_gx/phenotype_data/02processed/02_can_usa_processed_perindi_dep_31May2022.rdat")
+# 1 at end of df name indicates these are those EUR ancestry outliers 3sd
+```
+
+```{r, eval=FALSE,echo=FALSE}
+
+can <- fread("/Volumes/kowalec_pharmacy/psych_imid_gx/cassy/imid/31-jan-22/00_imid_processed_perIndivi_cassy_31Jan22.txt") %>%
+  as_tibble() %>% select(-demo_disease:-demo_depression) # remove as will get from below
+
+load("/Volumes/kowalec_pharmacy/psych_imid_gx/phenotype_data/02processed/01_imid_processed_perindividual_full_12Jan2022.rdat")
+rm(a)
+
+# merge canada
+can <- left_join(can,b)
+rm(b)
+
+usa <- fread("/Volumes/kowalec_pharmacy/psych_imid_gx/cassy/combi/12-oct-21/indivi/00_combi_processed_perIndivi_cassy_12Oct21.txt") %>%
+  as_tibble()
+
+# add in PCs for combi
+
+# PCA - 3 SD outliers removed
+p <- fread("~/Documents/projects/2.imid.psych.gen/analysis/04_Imputed/combi/pca_w1kg/ancestry-outliers/CombiRx_whites_imputed_renamed_3sdOutliersRemoved.eigenvec") %>%
+  select(V2:V22) %>%
+  rename(Specimen_ID=V2,
+         PC1_3sd=V3,
+         PC2_3sd=V4,
+         PC3_3sd=V5,
+         PC4_3sd=V6,
+         PC5_3sd=V7,
+         PC6_3sd=V8,
+         PC7_3sd=V9,
+         PC8_3sd=V10,
+         PC9_3sd=V11,
+         PC10_3sd=V12,
+         PC11_3sd=V13,
+         PC12_3sd=V14,
+         PC13_3sd=V15,
+         PC14_3sd=V16,
+         PC15_3sd=V17,
+         PC16_3sd=V18,
+         PC17_3sd=V19,
+         PC18_3sd=V20,
+         PC19_3sd=V21,
+         PC20_3sd=V22
+         )
+
+usa <- left_join(usa, p)
+
+usa <- usa %>%
+  mutate(outlier_3sd = ifelse(is.na(PC3_3sd),1,0))
+
+# add in baseline PHQ-9 measure for controls (1 measure only-hence why not included in dep symps longitudinal study)
+load("/Volumes/kowalec_pharmacy/Kaarina/3.DepSympTraj/01_imid_processed_longitudinal_4_Nov_21.rdat")
+
+rm(a,b,c4,c1)
+
+c <- c %>%
+  filter(demo_disease==6) %>%
+  select(demo_studyid,phq_total_score) %>%
+  rename(baseline_phq_total_score=phq_total_score) %>%
+  mutate(phq_above10=ifelse(baseline_phq_total_score>=10,1,0))
+
+can1 <- left_join(can1,c,by="demo_studyid")
+
+can1 <- can1 %>%
+  mutate(baseline_phq_total_score.x=ifelse(is.na(baseline_phq_total_score.x), baseline_phq_total_score.y, baseline_phq_total_score.x),
+         phq_above10.x=ifelse(is.na(phq_above10.x), phq_above10.y, phq_above10.x))
+
+can1 <- can1 %>%
+  rename(baseline_phq_total_score=baseline_phq_total_score.x,
+         phq_above10=phq_above10.x)  %>%
+  select(-phq_above10.y,
+         -baseline_phq_total_score.y)
+
+### to can DF
+can <- left_join(can,c,by="demo_studyid")
+
+can <- can %>%
+  mutate(baseline_phq_total_score.x=ifelse(is.na(baseline_phq_total_score.x), baseline_phq_total_score.y, baseline_phq_total_score.x),
+         phq_above10.x=ifelse(is.na(phq_above10.x), phq_above10.y, phq_above10.x))
+
+can <- can %>%
+  rename(baseline_phq_total_score=baseline_phq_total_score.x,
+         phq_above10=phq_above10.x)  %>%
+  select(-phq_above10.y,
+         -baseline_phq_total_score.y)
+
+# BMI	Weight Status
+#Below 18.5	Underweight
+#18.5 – 24.9	Healthy Weight
+#25.0 – 29.9	Overweight
+#30.0 and Above	Obesity
+
+can1 <- can1 %>%
+  mutate(bmi_cat1 = ifelse(BMI<=24.99999,0,1), #bmi_cat1 = 0 (healthy or under), bmi_cat1=1 (overweight or above)
+         bmi_cat2 = case_when(BMI <= 24.99999 ~ 0, # healthy
+                              (BMI >= 25 & BMI <= 29.99999) ~ 1, # overwt
+                              BMI >= 30 ~ 2, #obese
+                              TRUE ~ NA_real_
+                              ))
+
+can <- can %>%
+  mutate(bmi_cat1 = ifelse(BMI<=24.99999,0,1), #bmi_cat1 = 0 (healthy or under), bmi_cat1=1 (overweight or above)
+         bmi_cat2 = case_when(BMI <= 24.99999 ~ 0, # healthy
+                              (BMI >= 25 & BMI <= 29.99999) ~ 1, # overwt
+                              BMI >= 30 ~ 2, #obese
+                              TRUE ~ NA_real_
+                              ))
+
+
+usa1 <- usa1 %>%
+  mutate(bmi_cat1 = ifelse(BMI<=24.99999,0,1), #bmi_cat1 = 0 (healthy or under), bmi_cat1=1 (overweight or above)
+         bmi_cat2 = case_when(BMI <= 24.99999 ~ 0, # healthy
+                              (BMI >= 25 & BMI <= 29.99999) ~ 1, # overwt
+                              BMI >= 30 ~ 2, #obese
+                              TRUE ~ NA_real_
+                              ))
+
+
+
+usa <- usa %>%
+  mutate(bmi_cat1 = ifelse(BMI<=24.99999,0,1), #bmi_cat1 = 0 (healthy or under), bmi_cat1=1 (overweight or above)
+         bmi_cat2 = case_when(BMI <= 24.99999 ~ 0, # healthy
+                              (BMI >= 25 & BMI <= 29.99999) ~ 1, # overwt
+                              BMI >= 30 ~ 2, #obese
+                              TRUE ~ NA_real_
+                              ))
+
+# PHQ-9 ≥15
+
+can1 <- can1 %>%
+  mutate(phq_above15=ifelse(baseline_phq_total_score>=10,1,0))
+can <- can %>%
+  mutate(phq_above15=ifelse(baseline_phq_total_score>=10,1,0))
+
+can1 <- can1 %>%
+  mutate(aim1a_mdd_phq9_above15=case_when(demo_disease == 1 & phq_above15 == 1 ~ 1,  # MS and PHQ9 >15
+                        demo_disease==1 & phq_above15 == 0 ~ 0, # MS and no PHQ-9 15
+                        TRUE~NA_real_),
+         aim1b_mdd_phq9_above15=case_when(demo_disease == 1 & phq_above15 == 1 ~ 1,  # MS and PHQ9 >15
+                        demo_disease==4 & phq_above15 == 1 ~ 0, # mdd no MS
+                        TRUE~NA_real_),
+         aim1c_mdd_phq9_above10=case_when(demo_disease == 1 & phq_above10 == 1 ~ 1,  # MS and PHQ9 >10
+                        demo_disease==6 & phq_above10 == 0 ~ 0, # hc, no phq9 10
+                        TRUE~NA_real_))
+
+
+can <- can %>%
+  mutate(aim1a_mdd_phq9_above15=case_when(demo_disease == 1 & phq_above15 == 1 ~ 1,  # MS and PHQ9 >15
+                        demo_disease==1 & phq_above15 == 0 ~ 0, # MS and no PHQ-9 15
+                        TRUE~NA_real_),
+         aim1b_mdd_phq9_above15=case_when(demo_disease == 1 & phq_above15 == 1 ~ 1,  # MS and PHQ9 >15
+                        demo_disease==4 & phq_above15 == 1 ~ 0, # mdd no MS
+                        TRUE~NA_real_),
+         aim1c_mdd_phq9_above10=case_when(demo_disease == 1 & phq_above10 == 1 ~ 1,  # MS and PHQ9 >10
+                        demo_disease==6 & phq_above10 == 0 ~ 0, # hc, no phq9 10
+                        TRUE~NA_real_))
+         
+
+can1 <- can1 %>%
+  mutate(diseasegroup = case_when(demo_disease == 1 & demo_depression==1 ~ 1,  # MS and self rep MDD
+                        demo_disease == 1 & demo_depression == 0 ~ 2, # MS no self rep MDD
+                        demo_disease == 4 & demo_depression == 1 ~ 3, # mdd no MS
+                        demo_disease==6 ~ 0, #HC
+                        TRUE~NA_real_))
+
+can1 <- can1 %>%
+  mutate(mdd = ifelse(demo_disease == 4, 1, 0),
+         ms = ifelse(demo_disease == 1, 1, 0))
+         
+can1$mdd<-as.integer(can1$mdd)
+can1$ms<-as.integer(can1$ms)
+
+can1 <- can1 %>%
+  mutate(interact_mdd_bmiPRS.s6 = mdd*z_bmi.s6,
+         interact_mdd_mddPRS.s8 = mdd*z_mdd.s8,
+         interact_MS_bmiPRS.s6 = ms*z_bmi.s6,
+         interact_MS_mddPRS.s8 = ms*z_mdd.s8
+         )
+can1$demo_disease <- as.factor(can1$demo_disease)
+can1$demo_disease <- relevel(can1$demo_disease, ref="6")
+
+
+```
+
+# 3. Filter to study cohort
+```{r eval = FALSE,echo=FALSE}
+# no need to run as already done in the file in "load" from beginning
+can <- can %>%
+#  filter(outlier_3sd == 0) %>% # remove ancestry outliers-done already
+  mutate(table1filter=case_when(demo_disease==1 & demo_depression==1 ~ "MS-Dep", #selfreport dep
+                                demo_disease==1 & demo_depression==0 ~ "MS-NoDep", #no selfreport dep
+                                demo_disease==4 & demo_depression==1 ~ "Dep",
+                                demo_disease==6 ~ "healthy",
+                                TRUE ~ NA_character_)) 
+
+can1 <- can1 %>%
+  mutate(table1filter=case_when(demo_disease==1 & demo_depression==1 ~ "MS-Dep", #selfreport dep
+                                demo_disease==1 & demo_depression==0 ~ "MS-NoDep", #no selfreport dep
+                                demo_disease==4 & demo_depression==1 ~ "Dep",
+                                demo_disease==6 ~ "healthy",
+                                TRUE ~ NA_character_)) 
+
+
+# fix education cat
+# 1, Elementary school | 2, Junior High school | 3, High school diploma/GED | 4, College | 5, Technical/Trade | 6, University bachelor degree | 7, University master's degree | 8, University doctorate | 9, Other | 10, Refuse to answer
+
+can <- can %>%
+  mutate(demo_educ_cat = case_when(demo_educ <= 3 ~ 0,
+                                   demo_educ >= 4 & demo_educ <= 8 ~ 1,
+                                   demo_educ == 9 ~ 2,
+                                   TRUE ~ NA_real_))
+
+```
+
+
+# 4. Table 1 - characteristics - Canada
+```{r}
+
+table(can1$table1filter)
+
+nrow(can1)
+
+# continuous
+can1 %>%
+  group_by(table1filter) %>%
+  summarise(age=mean(age,na.rm=T),
+            sd_age=sd(age,na.rm=T),
+            education_yrs=mean(demo_yrs_educ.x),
+            sd_educ_yrs=sd(demo_yrs_educ.x,na.rm=T),
+            phq9_score=mean(baseline_phq_total_score,na.rm=T),
+            sd_phq9=sd(baseline_phq_total_score,na.rm=T))
+
+can1 %>%
+  group_by(table1filter) %>%
+  summarise(bmiprs=mean(z_bmi.s8),
+            bmiprs_sd=sd(z_bmi.s8),
+            mddprs=mean(z_mdd.s1),
+            mddprs_sd=sd(z_mdd.s1),
+            bmi_mean=mean(BMI,na.rm=T),
+            bmi_sd=sd(BMI,na.rm=T)
+            )
+
+# categorical
+
+can1 %>%
+  count(demo_gender,table1filter) %>%
+  group_by(table1filter) %>%
+  mutate(percent = n / sum(n) * 100)
+   
+can1 %>%
+  count(demo_educ_cat, table1filter) %>%
+  group_by(table1filter) %>%
+  mutate(percent = n / sum(n) * 100)
+
+can1 %>%
+  count(demo_income_cat, table1filter) %>%
+  group_by(table1filter) %>%
+  mutate(percent = n / sum(n) * 100)
+
+can1 %>%
+  count(demo_smoker, table1filter) %>%
+  group_by(table1filter) %>%
+  mutate(percent = n / sum(n) * 100)
+
+can1 %>%
+  count(scid_ever_dep, table1filter) %>%
+  group_by(table1filter) %>%
+  mutate(percent = n / sum(n) * 100)
+
+can1 %>%
+  count(demo_depression, table1filter) %>%
+  group_by(table1filter) %>%
+  mutate(percent = n / sum(n) * 100)
+            
+can1 %>%
+  count(phq_above10, table1filter) %>%
+  group_by(table1filter) %>%
+  mutate(percent = n / sum(n) * 100)
+            
+can1 %>%
+  count(phq_above15, table1filter) %>%
+  group_by(table1filter) %>%
+  mutate(percent = n / sum(n) * 100)
+
+can1 %>%
+  count(bmi_cat2,table1filter) %>%
+  group_by(table1filter) %>%
+  mutate(percent = n / sum(n) * 100)
+
+#BMI_Cat2 = 0=healthy, 1=overwt, 2=obese
+
+
+# gender strat numbers
+
+
+can1 %>%
+  filter(table1filter=="MS") %>%
+  count(scid_ever_dep, demo_gender) %>%
+  group_by(demo_gender) %>%
+  mutate(percent = n / sum(n) * 100)
+
+can1 %>%
+  filter(table1filter=="MS") %>%
+  count(demo_depression, demo_gender) %>%
+  group_by(demo_gender) %>%
+  mutate(percent = n / sum(n) * 100)
+            
+can1 %>%
+  filter(table1filter=="MS") %>%
+  count(phq_above10, demo_gender) %>%
+  group_by(demo_gender) %>%
+  mutate(percent = n / sum(n) * 100)
+
+can1 %>%
+  filter(table1filter=="MS") %>%
+  count(phq_above15, demo_gender) %>%
+  group_by(demo_gender) %>%
+  mutate(percent = n / sum(n) * 100)
+
+# correlation between BMI and BMI PRS in CAD
+
+# MS DEP-lifetimeMDD
+ms_dep <- can1 %>%
+  filter(aim1a_mdd_icd_cidi_scid==1) %>%
+  select(BMI,z_bmi.s8)
+cor.test(ms_dep$BMI, ms_dep$z_bmi.s8)
+#r2=0.20, 95%CI: -0.02 to 0.39, p=0.07
+
+# MS DEP-self reported
+ms_dep <- can1 %>%
+  filter(aim1a_mdd_selfreported==1) %>%
+  select(BMI,z_bmi.s8)
+cor.test(ms_dep$BMI, ms_dep$z_bmi.s8)
+#r2=0.25, 95%CI: 0.05 to 0.43, p=0.01
+
+# MS noDEP
+ms_nodep <- can1 %>%
+  filter(aim1a_mdd_selfreported==0) %>%
+  select(BMI,z_bmi.s8)
+cor.test(ms_nodep$BMI, ms_nodep$z_bmi.s8)
+#r2=0.35, 95%CI: 0.18-0.51, p=9.5e-5
+
+# DEP, no immune
+dep <- can1 %>%
+  filter(aim1b_mdd_selfreported==0) %>%
+  select(BMI,z_bmi.s8)
+cor.test(dep$BMI, dep$z_bmi.s8)
+#r2=0.27, 95%CI: 0.10-0.43, p=0.003
+
+# Healthy
+hc <- can1 %>%
+  filter(aim1c_mdd_selfreported==0) %>%
+  select(BMI,z_bmi.s8)
+cor.test(hc$BMI, hc$z_bmi.s8)
+#r2=0.11, 95%CI: -0.11 to 0.38, p=0.2          
+```
+
+# 5. Table 1 - characteristics - USA
+```{r}
+
+nrow(usa1)
+
+
+table(usa1$status_dp)
+
+# continuous
+usa1 %>%
+  group_by(status_dp) %>%
+  summarise(age=mean(age,na.rm=T),
+            sd_age=sd(age,na.rm=T),
+            bmiprs=mean(z_bmi.s3),
+            bmiprs_sd=sd(z_bmi.s3),
+            mddprs=mean(z_mdd.s8), #value is zero, Sd=1 bc its been standardized
+            mddprs_sd=sd(z_mdd.s8),
+            bmi_mean=mean(BMI),
+            bmi_sd=sd(BMI)
+            )
+
+# categorical
+usa1 %>%
+  count(gender,status_dp)%>%
+  group_by(status_dp) %>%
+  mutate(percent = n / sum(n) * 100)
+   
+#ed_b = 1 (HS or less), 0 (college or some)
+
+usa1 %>%
+  count(ed_b,status_dp) %>%
+  group_by(status_dp) %>%
+  mutate(percent = n / sum(n) * 100)
+
+usa1 %>%
+  count(sm_hx,status_dp) %>%
+    group_by(status_dp) %>%
+mutate(percent = n / sum(n) * 100)
+
+usa1 %>%
+  count(status_dp) %>%
+  mutate(percent = n / sum(n) * 100)
+
+usa1 %>%
+  count(gender,status_dp) %>%
+  group_by(status_dp) %>%
+  mutate(percent = n / sum(n) * 100)
+
+usa1 %>%
+  count(bmi_cat2,status_dp) %>%
+    group_by(status_dp) %>%
+mutate(percent = n / sum(n) * 100)
+
+#BMI_Cat2 = 0=healthy, 1=overwt, 2=obese
+
+
+# BMI and BMI PRS correlation
+
+# MS DEP-self reported
+ms_dep <- usa1 %>%
+  filter(status_dp==1) %>%
+  select(BMI,z_bmi.s3)
+cor.test(ms_dep$BMI, ms_dep$z_bmi.s3)
+
+# MS noDEP
+ms_nodep <- usa1 %>%
+   filter(status_dp==0) %>%
+  select(BMI,z_bmi.s3)
+cor.test(ms_nodep$BMI, ms_nodep$z_bmi.s3)
+
+```
+
+# 6. Aim 1a - Compare MS/DEP vs MS/noDEP
+```{r}
+######### CANADA
+
+# Aim 1a - def1
+test <- glm(as.factor(aim1a_mdd_icd_cidi_scid) ~ age + demo_gender + z_mdd.s1 +
+              z_bmi.s8 + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,
+            family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+# Aim 1a- def2
+
+test <- glm(as.factor(aim1a_mdd_selfreported) ~ age + demo_gender + z_mdd.s1 +
+              z_bmi.s8 + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,
+            family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+# Aim 1a - def3
+
+test <- glm(as.factor(aim1a_mdd_phq9_above10) ~ age + demo_gender + z_mdd.s1 +
+              z_bmi.s8 + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,
+            family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+############ USA
+
+# Aim 1a- def2
+
+test <- glm(as.factor(status_dp) ~ age + z_mdd.s8 + gender +
+              z_bmi.s3 + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=usa1, family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+
+```
+# 7. Aim 1b - Compare MS/DEP vs. DEP/noImmune
+```{r}
+
+
+#################
+#AIM 1b
+#################
+
+
+# Aim 1b
+test <- glm(as.factor(aim1b_mdd_icd_cidi_scid) ~ age + demo_gender +z_mdd.s1 +
+              z_bmi.s8  + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,
+            family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+# Aim 1b- def2
+
+test <- glm(as.factor(aim1b_mdd_selfreported) ~ age + demo_gender + z_mdd.s1 +
+              z_bmi.s8  + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,
+            family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+# Aim 1b - def3
+
+test <- glm(as.factor(aim1b_mdd_phq9_above10) ~ age + demo_gender + z_mdd.s1 +
+              z_bmi.s8 + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,
+            family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+
+
+```
+
+# 8. Aim 1c - Compare MS/DEP vs. healthy
+```{r}
+
+#################
+#AIM 1c
+#################
+
+# Aim 1c
+test <- glm(as.factor(aim1c_mdd_icd_cidi_scid) ~ age + demo_gender + z_mdd.s8 +
+              z_bmi.s4 + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,
+            family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+
+# Aim 1c- def2
+
+test <- glm(as.factor(aim1c_mdd_selfreported) ~ age + demo_gender + z_mdd.s8 +
+              z_bmi.s4 + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,
+            family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+
+# Aim 1c- def3
+
+test <- glm(as.factor(aim1c_mdd_phq9_above10) ~ age + demo_gender + z_mdd.s8 +
+              z_bmi.s4 + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,
+            family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+```
+
+# 9. Aim 1a-Gender stratified and meta-analyses
+```{r}
+# CANADA
+
+# FEMALE
+# Aim 1a - def1
+
+test <- glm(as.factor(aim1a_mdd_icd_cidi_scid) ~ age + z_mdd.s1 +
+              z_bmi.s8 + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,
+            subset=demo_gender==1, family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+# Aim 1a- def2
+
+test <- glm(as.factor(aim1a_mdd_selfreported) ~ age + z_mdd.s1 +
+              z_bmi.s8 + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,
+            subset=demo_gender==1, family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+# Aim 1a -def3
+
+test <- glm(as.factor(aim1a_mdd_phq9_above10) ~ age + z_mdd.s1 +
+              z_bmi.s8 + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,
+            subset=demo_gender==1, family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+# Aim 1a - def5
+
+test <- lm(baseline_phq_total_score ~ age + z_mdd.s1 +
+              z_bmi.s8 + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,
+            subset=(demo_disease1==1 & demo_gender==1))
+summary(test)
+
+# ###### MALE
+# Aim 1a - def1
+
+test <- glm(as.factor(aim1a_mdd_icd_cidi_scid) ~ age + z_mdd.s1 +
+              z_bmi.s8 + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,
+            subset=demo_gender==0, family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+# Aim 1a- def2
+
+test <- glm(as.factor(aim1a_mdd_selfreported) ~ age + z_mdd.s1 +
+              z_bmi.s8 + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,
+            subset=demo_gender==0, family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+# Aim 1a -def3
+
+test <- glm(as.factor(aim1a_mdd_phq9_above10) ~ age + z_mdd.s1 +
+              z_bmi.s8 + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,
+            subset=demo_gender==0, family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+# Aim 1a - def5
+
+test <- lm(baseline_phq_total_score ~ age + z_mdd.s1 +
+              z_bmi.s8 + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,
+            subset=(demo_disease1==1 & demo_gender==0))
+summary(test)
+
+
+# USA
+# FEMALE
+
+# Aim 1a- def2
+
+test <- glm(as.factor(status_dp) ~ age + z_mdd.s8 +
+                   z_bmi.s3 + PC1 + PC2 + PC3 + PC4 + PC5, data=usa1,
+            subset=gender=="F", family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+# MALE
+# Aim 1a- def2
+
+test <- glm(as.factor(status_dp) ~ age + z_mdd.s8 +
+              z_bmi.s3 + PC1 + PC2 + PC3 + PC4 + PC5, data=usa1,
+            subset=gender=="M", family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+
+```
+
+```{r, eval=FALSE}
+# meta analyses for only Aim 1a
+
+gender <- readxl::read_xlsx("~/Documents/projects/2.imid.psych.gen/analysis/08_Results/aim1/03-Jan2022/00-allcohorts-dep-aim1-12Apr2022-v2-forCassy.xlsx",sheet="gender-strat")
+
+# FEMALE
+
+aim1a.2 <- gender %>% filter(aim=="1a") %>% filter(definition == "selfreported" & gender=="female") %>% filter(PRS=="mdd")
+#Fixed-effect inverse-variance weighted meta-analysis
+res.fe <- rma(yi=estimate, sei=se, method="FE", data = aim1a.2)
+summary(res.fe)
+
+
+aim1a.2 <- gender %>% filter(aim=="1a") %>% filter(definition == "selfreported" & gender=="female") %>% filter(PRS=="bmi")
+#Fixed-effect inverse-variance weighted meta-analysis
+res.fe <- rma(yi=estimate, sei=se, method="FE", data = aim1a.2)
+summary(res.fe)
+
+# MALE
+
+aim1a.2 <- gender %>% filter(aim=="1a") %>% filter(definition == "selfreported" & gender=="male") %>% filter(PRS=="mdd")
+#Fixed-effect inverse-variance weighted meta-analysis
+res.fe <- rma(yi=estimate, sei=se, method="FE", data = aim1a.2)
+summary(res.fe)
+
+
+aim1a.2 <- gender %>% filter(aim=="1a") %>% filter(definition == "selfreported" & gender=="male") %>% filter(PRS=="bmi")
+#Fixed-effect inverse-variance weighted meta-analysis
+res.fe <- rma(yi=estimate, sei=se, method="FE", data = aim1a.2)
+summary(res.fe)
+
+
+
+```
+
+
+# 10. PHQ-9 linear model and gender stratified
+
+```{r}
+###### WITH INTERACTION TERMS ##############
+test <- lm(baseline_phq_total_score ~ age + demo_gender + z_mdd.s8 + z_bmi.s6 + demo_disease +
+             interact_mdd_bmiPRS.s6 + interact_mdd_mddPRS.s8 + interact_MS_bmiPRS.s6 + interact_MS_mddPRS.s8 +
+             PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1)
+summary(test)
+
+# BMI CATEGORY: normal
+test <- lm(baseline_phq_total_score ~ age + demo_gender + z_mdd.s8 + z_bmi.s6 + demo_disease +
+            interact_mdd_mddPRS.s8 + interact_MS_mddPRS.s8 + PC1_3sd + PC2_3sd +
+             PC3_3sd + PC4_3sd + PC5_3sd, data=can1,subset=bmi_cat1==0)
+summary(test)
+
+# BMI CATEGORY: overweight
+test <- lm(baseline_phq_total_score ~ age + demo_gender + demo_disease + z_mdd.s8 + z_bmi.s6 +
+            interact_mdd_mddPRS.s8 + interact_MS_mddPRS.s8 + PC1_3sd + PC2_3sd +
+             PC3_3sd + PC4_3sd + PC5_3sd, data=can1,subset=bmi_cat1==1)
+summary(test)
+
+
+###### NO INTERACTION  ##############
+test <- lm(baseline_phq_total_score ~ age + demo_gender + z_mdd.s8 + z_bmi.s6 + demo_disease +
+             PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1)
+summary(test)
+
+# BMI CATEGORY: normal
+test <- lm(baseline_phq_total_score ~ age + demo_gender + z_mdd.s8 + z_bmi.s6 + demo_disease +
+             PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,subset=bmi_cat1==0)
+summary(test)
+
+# BMI CATEGORY: overweight
+test <- lm(baseline_phq_total_score ~ age + demo_gender + demo_disease + z_mdd.s8 + z_bmi.s6 +
+            PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,subset=bmi_cat1==1)
+summary(test)
+
+
+
+###### GENDER STRAT ##############
+
+# FEMALE
+test <- lm(baseline_phq_total_score ~ age + z_mdd.s8 + z_bmi.s6 + demo_disease +
+             PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,subset=demo_gender==1)
+summary(test)
+
+# MALE
+test <- lm(baseline_phq_total_score ~ age + demo_disease + z_mdd.s8 + z_bmi.s6 +
+            PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,subset=demo_gender==0)
+summary(test)
+
+
+
+```
+
+# 11. BMI Stratified models-Aim1a
+```{r}
+
+# bmi_cat1 = 0 (healthy or under), 1 (overweight or above)
+
+######## CANADA
+# healthy or underwt
+# Aim 1a - def1
+test <- glm(as.factor(aim1a_mdd_icd_cidi_scid) ~ age + demo_gender + z_mdd.s1 +
+              z_bmi.s8 + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, 
+            data=can1, subset=bmi_cat1==0, family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+# Aim 1a- def2
+
+test <- glm(as.factor(aim1a_mdd_selfreported) ~ age + demo_gender + z_mdd.s1 +
+              z_bmi.s8 + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,
+            subset=bmi_cat1==0,
+            family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+# Aim 1a - def3
+
+test <- glm(as.factor(aim1a_mdd_phq9_above10) ~ age + demo_gender + z_mdd.s1 +
+              z_bmi.s8 + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,
+            subset=bmi_cat1==0,
+            family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+######## CANADA
+# obese or above
+# Aim 1a - def1
+test <- glm(as.factor(aim1a_mdd_icd_cidi_scid) ~ age + demo_gender + z_mdd.s1 +
+              z_bmi.s8 + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, 
+            data=can1, subset=bmi_cat1==1, family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+# Aim 1a- def2
+
+test <- glm(as.factor(aim1a_mdd_selfreported) ~ age + demo_gender + z_mdd.s1 +
+              z_bmi.s8 + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,
+            subset=bmi_cat1==1,
+            family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+# Aim 1a - def3
+test <- glm(as.factor(aim1a_mdd_phq9_above10) ~ age + demo_gender + z_mdd.s1 +
+              z_bmi.s8 + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,
+            subset=bmi_cat1==1,
+            family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+
+
+############ USA
+
+# Aim 1a- def2 - healthy BMI
+
+test <- glm(as.factor(status_dp) ~ age + z_mdd.s8 + gender +
+              z_bmi.s3 + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, 
+                subset=bmi_cat1==0, data=usa1, family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+
+############ USA
+
+# Aim 1a- def2 - obese BMI
+
+test <- glm(as.factor(status_dp) ~ age + z_mdd.s8 + gender + z_bmi.s3 + 
+              PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=usa1, 
+                subset=bmi_cat1==1,family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+```
+# 12. BMI Stratified models-Aim1b
+```{r}
+
+#################
+#AIM 1b
+#################
+
+
+# Aim 1b
+test <- glm(as.factor(aim1b_mdd_icd_cidi_scid) ~ age + demo_gender + z_mdd.s1 +
+              z_bmi.s8  + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,
+            subset = bmi_cat1 == 0,
+            family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+# Aim 1b- def2
+
+test <- glm(as.factor(aim1b_mdd_selfreported) ~ age + demo_gender + z_mdd.s1 +
+              z_bmi.s8  + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,
+             subset = bmi_cat1 == 0, family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+# Aim 1b - def3
+
+test <- glm(as.factor(aim1b_mdd_phq9_above10) ~ age + demo_gender + z_mdd.s1 +
+              z_bmi.s8 + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,
+             subset = bmi_cat1 == 0, family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+#### OBESE
+
+# Aim 1b
+test <- glm(as.factor(aim1b_mdd_icd_cidi_scid) ~ age + demo_gender +z_mdd.s1 +
+              z_bmi.s8  + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,
+            subset = bmi_cat1 == 1,
+            family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+# Aim 1b- def2
+
+test <- glm(as.factor(aim1b_mdd_selfreported) ~ age + demo_gender + z_mdd.s1 +
+              z_bmi.s8  + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,
+             subset = bmi_cat1 == 1, family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+# Aim 1b - def3
+
+test <- glm(as.factor(aim1b_mdd_phq9_above10) ~ age + demo_gender + z_mdd.s1 +
+              z_bmi.s8 + PC1_3sd + PC2_3sd + PC3_3sd + PC4_3sd + PC5_3sd, data=can1,
+             subset = bmi_cat1 == 1, family="binomial")
+summary(test)
+exp(cbind("Odds ratio" = coef(test), confint.default(test, level = 0.95)))
+
+```
+
+# 13. Meta-analyses-Aim 1a
+```{r,eval=FALSE}
+# metafor-meta analysis of dod aim 1 dep
+# 04/2022 by kk
+
+full <- readxl::read_xlsx("~/Documents/projects/2.imid.psych.gen/analysis/08_Results/aim1/03-Jan2022/00-allcohorts-dep-aim1-12Apr2022-v2.xlsx")
+
+##################
+##### MDD ########
+##################
+
+aim1a.1 <- full %>% filter(aim=="1a") %>% filter(definition == "mdd_icd_cidi_scid") %>% filter(PRS=="mdd")
+res.fe <- rma(yi=estimate, sei=SE, method="FE", data = aim1a.1)
+summary(res.fe)
+
+aim1a.2 <- full %>% filter(aim=="1a") %>% filter(definition == "mdd_selfreported") %>% filter(PRS=="mdd")
+res.fe <- rma(yi=estimate, sei=SE, method="FE", data = aim1a.2)
+summary(res.fe)
+
+aim1a.4 <- full %>% filter(aim=="1a") %>% filter(definition == "mdd_phq9_above10") %>% filter(PRS=="mdd")
+res.fe <- rma(yi=estimate, sei=SE, method="FE", data = aim1a.4)
+summary(res.fe)
+
+
+##################
+###### BMI #######
+##################
+
+aim1a.1 <- full %>% filter(aim=="1a") %>% filter(definition == "mdd_icd_cidi_scid") %>% filter(PRS=="bmi")
+res.fe <- rma(yi=estimate, sei=SE, method="FE", data = aim1a.1)
+summary(res.fe)
+
+aim1a.2 <- full %>% filter(aim=="1a") %>% filter(definition == "mdd_selfreported") %>% filter(PRS=="bmi")
+res.fe <- rma(yi=estimate, sei=SE, method="FE", data = aim1a.2)
+summary(res.fe)
+
+aim1a.4 <- full %>% filter(aim=="1a") %>% filter(definition == "mdd_phq9_above10") %>% filter(PRS=="bmi")
+res.fe <- rma(yi=estimate, sei=SE, method="FE", data = aim1a.4)
+summary(res.fe)
+
+```
+
+# 14. Meta-analyses-Aim 1b
+```{r,eval=FALSE}
+
+##################
+##### MDD ########
+##################
+
+aim1b.1 <- full %>% filter(aim=="1b") %>% filter(definition == "mdd_icd_cidi_scid") %>% filter(PRS=="mdd")
+#Fixed-effect inverse-variance weighted meta-analysis
+res.fe <- rma(yi=estimate, sei=SE, method="FE", data = aim1b.1)
+summary(res.fe)
+
+aim1b.2 <- full %>% filter(aim=="1b") %>% filter(definition == "mdd_selfreported") %>% filter(PRS=="mdd")
+#Fixed-effect inverse-variance weighted meta-analysis
+res.fe <- rma(yi=estimate, sei=SE, method="FE", data = aim1b.2)
+summary(res.fe)
+
+aim1b.4 <- full %>% filter(aim=="1b") %>% filter(definition == "mdd_phq9_above10") %>% filter(PRS=="mdd")
+#Fixed-effect inverse-variance weighted meta-analysis
+res.fe <- rma(yi=estimate, sei=SE, method="FE", data = aim1b.4)
+summary(res.fe)
+
+
+##################
+###### BMI #######
+##################
+
+aim1b.1 <- full %>% filter(aim=="1b") %>% filter(definition == "mdd_icd_cidi_scid") %>% filter(PRS=="bmi")
+#Fixed-effect inverse-variance weighted meta-analysis
+res.fe <- rma(yi=estimate, sei=SE, method="FE", data = aim1b.1)
+summary(res.fe)
+
+aim1b.2 <- full %>% filter(aim=="1b") %>% filter(definition == "mdd_selfreported") %>% filter(PRS=="bmi")
+#Fixed-effect inverse-variance weighted meta-analysis
+res.fe <- rma(yi=estimate, sei=SE, method="FE", data = aim1b.2)
+summary(res.fe)
+
+aim1b.4 <- full %>% filter(aim=="1b") %>% filter(definition == "mdd_phq9_above10") %>% filter(PRS=="bmi")
+#Fixed-effect inverse-variance weighted meta-analysis
+res.fe <- rma(yi=estimate, sei=SE, method="FE", data = aim1b.4)
+summary(res.fe)
+
+```
+
+# 15. Meta-analyses-Aim 1c
+```{r,eval=FALSE}
+
+##################
+##### MDD ########
+##################
+
+aim1c.1 <- full %>% filter(aim=="1c") %>% filter(definition == "mdd_icd_cidi_scid") %>% filter(PRS=="mdd")
+#Fixed-effect inverse-variance weighted meta-analysis
+res.fe <- rma(yi=estimate, sei=SE, method="FE", data = aim1c.1)
+summary(res.fe)
+
+aim1c.2 <- full %>% filter(aim=="1c") %>% filter(definition == "mdd_selfreported") %>% filter(PRS=="mdd")
+#Fixed-effect inverse-variance weighted meta-analysis
+res.fe <- rma(yi=estimate, sei=SE, method="FE", data = aim1c.2)
+summary(res.fe)
+
+##################
+###### BMI #######
+##################
+
+aim1c.1 <- full %>% filter(aim=="1c") %>% filter(definition == "mdd_icd_cidi_scid") %>% filter(PRS=="bmi")
+#Fixed-effect inverse-variance weighted meta-analysis
+res.fe <- rma(yi=estimate, sei=SE, method="FE", data = aim1c.1)
+summary(res.fe)
+
+aim1c.2 <- full %>% filter(aim=="1c") %>% filter(definition == "mdd_selfreported") %>% filter(PRS=="bmi")
+#Fixed-effect inverse-variance weighted meta-analysis
+res.fe <- rma(yi=estimate, sei=SE, method="FE", data = aim1c.2)
+summary(res.fe)
+
+```
+# 16. Meta-analyses-All Aim1-PHQ-9
+
+```{r}
+# metafor-meta analysis of dod aim 1 dep
+# for phq-9 only
+
+phq9 <- readxl::read_xlsx("~/Documents/projects/2.imid.psych.gen/analysis/08_Results/aim1/05-May2022/00-allcohorts-dep-aim1-25May2022.xlsx",sheet="phq9")
+
+#Fixed-effect inverse-variance weighted meta-analysis
+
+##################
+##### ALL ########
+##################
+
+phq9.all <- phq9 %>% filter(strat=="full")
+
+res.fe <- rma(yi=estimate, sei=std.error, method="FE", data = phq9.all, subset=factor=="mdd_prs")
+summary(res.fe)
+
+res.fe <- rma(yi=estimate, sei=std.error, method="FE", data = phq9.all, subset=factor=="bmi_prs")
+summary(res.fe)
+
+res.fe <- rma(yi=estimate, sei=std.error, method="FE", data = phq9.all, subset=factor=="demo_disease_mdd_icd")
+summary(res.fe)
+
+res.fe <- rma(yi=estimate, sei=std.error, method="FE", data = phq9.all, subset=factor=="demo_disease_ms")
+summary(res.fe)
+
+############################
+##### BMI Stratified #######
+############################
+
+phq9.all <- phq9 %>% filter(strat=="healthy")
+
+res.fe <- rma(yi=estimate, sei=std.error, method="FE", data = phq9.all, subset=factor=="mdd_prs")
+summary(res.fe)
+
+res.fe <- rma(yi=estimate, sei=std.error, method="FE", data = phq9.all, subset=factor=="bmi_prs")
+summary(res.fe)
+
+res.fe <- rma(yi=estimate, sei=std.error, method="FE", data = phq9.all, subset=factor=="demo_disease_mdd_icd")
+summary(res.fe)
+
+res.fe <- rma(yi=estimate, sei=std.error, method="FE", data = phq9.all, subset=factor=="demo_disease_ms")
+summary(res.fe)
+
+
+############################
+##### BMI Stratified -o/w ##
+############################
+
+phq9.all <- phq9 %>% filter(strat=="overweight")
+
+res.fe <- rma(yi=estimate, sei=std.error, method="FE", data = phq9.all, subset=factor=="mdd_prs")
+summary(res.fe)
+
+res.fe <- rma(yi=estimate, sei=std.error, method="FE", data = phq9.all, subset=factor=="bmi_prs")
+summary(res.fe)
+
+res.fe <- rma(yi=estimate, sei=std.error, method="FE", data = phq9.all, subset=factor=="demo_disease_mdd_icd")
+summary(res.fe)
+
+res.fe <- rma(yi=estimate, sei=std.error, method="FE", data = phq9.all, subset=factor=="demo_disease_ms")
+summary(res.fe)
+
+############################
+##### Sex Stratified #######
+############################
+
+phq9.all <- phq9 %>% filter(strat=="males")
+
+res.fe <- rma(yi=estimate, sei=std.error, method="FE", data = phq9.all, subset=factor=="mdd_prs")
+summary(res.fe)
+
+res.fe <- rma(yi=estimate, sei=std.error, method="FE", data = phq9.all, subset=factor=="bmi_prs")
+summary(res.fe)
+
+res.fe <- rma(yi=estimate, sei=std.error, method="FE", data = phq9.all, subset=factor=="demo_disease_mdd_icd")
+summary(res.fe)
+
+res.fe <- rma(yi=estimate, sei=std.error, method="FE", data = phq9.all, subset=factor=="demo_disease_ms")
+summary(res.fe)
+
+
+############################
+##### Sex Stratified #######
+############################
+
+phq9.all <- phq9 %>% filter(strat=="females")
+
+res.fe <- rma(yi=estimate, sei=std.error, method="FE", data = phq9.all, subset=factor=="mdd_prs")
+summary(res.fe)
+
+res.fe <- rma(yi=estimate, sei=std.error, method="FE", data = phq9.all, subset=factor=="bmi_prs")
+summary(res.fe)
+
+res.fe <- rma(yi=estimate, sei=std.error, method="FE", data = phq9.all, subset=factor=="demo_disease_mdd_icd")
+summary(res.fe)
+
+res.fe <- rma(yi=estimate, sei=std.error, method="FE", data = phq9.all, subset=factor=="demo_disease_ms")
+summary(res.fe)
+```
+
+# 17. Plots
+```{r,eval=FALSE}
+plot <- readxl::read_xlsx("~/Documents/projects/2.imid.psych.gen/analysis/08_Results/aim1/05-May2022/00-allcohorts-dep-aim1-25May2022.xlsx",sheet="v2") %>% as_tibble() 
+
+# plot OR and 95%CI
+
+plot$aim <- factor(plot$aim, levels=c("A: Multiple sclerosis-depression vs. multiple sclerosis-no depression","B: Multiple sclerosis-depression vs. depression-no immune disease","Multiple sclerosis-depression vs. healthy"))
+plot$Sample <- factor(plot$Sample, levels = c("Canada","UK","USA","Meta-analysis"))
+plot$definition <- factor(plot$definition, levels = c("Lifetime MDD","Self-reported depression","PHQ-9 ≥ 10"))
+aim1 <- plot %>% filter(aim!="Multiple sclerosis-depression vs. healthy")
+
+fpA <- ggplot(data=aim1) +
+  geom_pointrange(aes(x=definition, y=estimate, ymin=lower, ymax=upper, 
+                      color=Sample), size=.75, position=position_dodge(width=.75)) + 
+  geom_hline(yintercept=1,lty=1,size=.5) +  
+  facet_grid(. ~ aim, scales = "free")  + 
+  xlab("Depression Definition") + 
+  ylab("Odds Ratio (95% CI)") +
+  scale_y_continuous(breaks = seq(0.75,2, by=0.5), limits = c(0.75,2)) +
+  theme(strip.text.x = element_text(size=12),
+        axis.title.x = element_text(size=12),
+        axis.title.y = element_text(size=12),
+        axis.text.y = element_text(size=12),
+        axis.text.x = element_text(size=12,angle=45,vjust=0.5),
+        axis.ticks = element_blank(),
+        panel.background = element_blank(),
+        axis.line = element_line(colour = "black",size=.25),
+        legend.position = "bottom",
+        legend.text = element_text(size=12))
+
+ggsave(file="~/Documents/projects/2.imid.psych.gen/analysis/08_Results/aim1/05-May2022/00-allcohorts-dep-aim1-9June2022.png",fpA,width = 15,heigh=7) # change date in file name
+
+
+```
+
+```{r, Venn Diagram}
+
+library(ggvenn)
+
+###### MS CANADA
+can1_venn_ms <- can1 %>%
+  filter(demo_disease==1) %>%
+  mutate(ms_nodep = case_when( (aim1a_mdd_icd_cidi_scid == 0 & aim1a_mdd_selfreported ==0 & aim1a_mdd_phq9_above10==0|is.na(aim1a_mdd_phq9_above10)) ~ 0, TRUE~1)) %>%
+  filter(ms_nodep==1) %>%
+  select(demo_studyid,aim1a_mdd_icd_cidi_scid,aim1a_mdd_selfreported,aim1a_mdd_phq9_above10) %>%
+  mutate(aim1a_mdd_icd_cidi_scid=ifelse(aim1a_mdd_icd_cidi_scid==1,TRUE,FALSE),
+         aim1a_mdd_selfreported=ifelse(aim1a_mdd_selfreported==1,TRUE,FALSE),
+         aim1a_mdd_phq9_above10=ifelse(is.na(aim1a_mdd_phq9_above10),FALSE,aim1a_mdd_phq9_above10),
+         aim1a_mdd_phq9_above10=ifelse(aim1a_mdd_phq9_above10==1,TRUE,FALSE)
+         ) %>%
+  rename(`Lifetime MDD`=aim1a_mdd_icd_cidi_scid,
+         `Self-reported depression`=aim1a_mdd_selfreported,
+         `PHQ-9 ≥ 10`=aim1a_mdd_phq9_above10)
+
+x <- ggplot(can1_venn_ms) +
+  geom_venn(aes(A = `Lifetime MDD`, B = `Self-reported depression`, C = `PHQ-9 ≥ 10`)) +
+  coord_fixed() +
+  theme_void() 
+
+######### DEP CANADA
+
+can1_venn_dep <- can1 %>%
+  filter(demo_disease==4) %>%
+  select(demo_studyid,aim1b_mdd_icd_cidi_scid,aim1b_mdd_selfreported,aim1b_mdd_phq9_above10) %>%
+  mutate(aim1b_mdd_icd_cidi_scid=ifelse(aim1b_mdd_icd_cidi_scid==0,TRUE,FALSE),
+         aim1b_mdd_selfreported=ifelse(aim1b_mdd_selfreported==0,TRUE,FALSE),
+         aim1b_mdd_phq9_above10=ifelse(aim1b_mdd_phq9_above10==0,TRUE,FALSE),
+          aim1b_mdd_phq9_above10=ifelse(is.na(aim1b_mdd_phq9_above10),FALSE,aim1b_mdd_phq9_above10)
+         ) %>%
+  rename(`Lifetime MDD`=aim1b_mdd_icd_cidi_scid,
+         `Self-reported depression`=aim1b_mdd_selfreported,
+         `PHQ-9 ≥ 10`=aim1b_mdd_phq9_above10)
+
+x1 <- ggplot(can1_venn_dep) +
+  geom_venn(aes(A = `Lifetime MDD`, B = `Self-reported depression`, C = `PHQ-9 ≥ 10`)) +
+  coord_fixed() +
+  theme_void() 
+
+
+library(cowplot)
+fp12 <- plot_grid(x,x1, labels = c("A: Canada-Multiple sclerosis", "B: Canada-Depression, no immune disease"), nrow = 1, align = "h", axis='l')
+
+fp12
+
+
+save_plot("~/Documents/projects/2.imid.psych.gen/analysis/08_Results/aim1/05-May2022/00-can-venn-31May22.png", fp12,
+         nrow = 2, ncol = 2, # and 2 rows
+# each individual subplot should have an aspect ratio of 1.3
+base_aspect_ratio = 1.8)
+
+
+```
+
+# Save
+```{r, eval=FALSE}
+#save(can,can1,usa1,usa,file="/Volumes/kowalec_pharmacy/psych_imid_gx/phenotype_data/02processed/02_can_usa_processed_perindi_dep_31May2022.rdat")
+
+```
